@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wtr"
+version = "0.1.0"
+description = "Git worktree manager with TUI"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.40.0",
+    "GitPython>=3.1.0",
+    "thefuzz>=0.22.0",
+    "tomli>=2.0.0; python_version < '3.11'",
+]
+
+[project.scripts]
+wtr = "wtr.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
