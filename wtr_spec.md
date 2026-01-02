@@ -12,6 +12,8 @@ CLI-утилита с TUI-интерфейсом для управления git
 - Удаление worktrees (без удаления веток)
 - **Worktree от коммита/тега** — detached HEAD или новая ветка от коммита
 - **Автоматическая реструктуризация** — преобразование репо в worktree-структуру
+- **Инициализация** (`--init`) — создание worktree-структуры и `share_obj.yaml`
+- **Shared symlinks** — автоматическое создание симлинков при создании worktree (на основе `share_obj.yaml`)
 
 ### Extended
 - **Fuzzy search** — фильтрация веток:
@@ -35,17 +37,25 @@ CLI-утилита с TUI-интерфейсом для управления git
 
 ```
 <container>/                     # контейнер (не git repo)
+├── share_obj.yaml               # конфиг симлинков (создаётся --init)
 ├── master/                      # основная ветка (main/master)
 │   ├── .git/                    # полноценная git директория
+│   ├── doc/                     # общая документация (реальная папка)
 │   └── src/
+├── log_dir/                     # локальная директория (создаётся --init --log_dir)
+│   └── .aiwr/                   # AI-related workfiles (реальная папка)
 ├── feature-x/                   # worktree (рядом с основной веткой)
 │   ├── .git                     # файл-ссылка на основной repo
+│   ├── doc -> ../master/doc    # симлинк (из share_obj.yaml)
+│   ├── .aiwr -> ../log_dir/.aiwr  # симлинк (из share_obj.yaml)
 │   └── src/
 ├── abc1234/                     # detached HEAD worktree
 │   ├── .git                     # файл-ссылка
+│   ├── doc -> ../master/doc    # симлинк
 │   └── src/
 └── feature-y/                   # worktree
     ├── .git
+    ├── doc -> ../master/doc    # симлинк
     └── src/
 ```
 
@@ -78,6 +88,70 @@ Move 'master' to worktree structure? [y/N]
 ```
 
 **При отказе:** worktree-операции блокируются.
+
+### Инициализация (--init)
+
+Команда `wtr --init` выполняет начальную настройку worktree-структуры:
+
+1. **Определение основной ветки:**
+   - Если есть worktrees → находит путь к основной через `git worktree list`
+   - Если запущена не из основной ветки → автоматически выполняет init там
+   - Если worktrees нет и текущая ветка не основная → ошибка
+
+2. **Реструктуризация** (если нужна):
+   - Запрашивает подтверждение
+   - Перемещает репозиторий в worktree-структуру
+
+3. **Создание `share_obj.yaml`:**
+   - Создаётся в контейнере (уровень выше основной ветки)
+   - Если файл существует — сообщение, файл не перезаписывается
+
+4. **Создание `log_dir`** (если `--log_dir`):
+   - Создаётся директория `log_dir/` в контейнере
+   - Внутри создаётся `.aiwr/`
+
+**Формат `share_obj.yaml`:**
+
+```yaml
+main:           # имя основной ветки
+  - doc         # симлинк на doc/ из основной ветки
+
+log_dir:        # только если --log_dir
+  - .aiwr       # симлинк на .aiwr/ из log_dir
+```
+
+Файл определяет, какие папки/файлы будут симлинками при создании worktree. Ключи — источники (ветка или директория), значения — список элементов для симлинка.
+
+### Автоматическое создание симлинков
+
+При создании worktree (`wtr add`) автоматически создаются симлинки на основе `share_obj.yaml`:
+
+1. Читается `share_obj.yaml` из контейнера
+2. Для каждой пары `источник: [элементы]`:
+   - Пропускается, если источник = создаваемый worktree
+   - Для каждого элемента создаётся симлинк: `worktree/<элемент>` → `../<источник>/<элемент>`
+3. Если источник не существует — выводится предупреждение, симлинк всё равно создаётся
+4. Предупреждения выводятся:
+   - CLI: в stderr с префиксом `❗`
+   - TUI: в AlertDialog перед диалогом "Go to?"
+
+**Пример:**
+
+`share_obj.yaml`:
+```yaml
+master:
+  - doc
+  - config.json
+log_dir:
+  - .aiwr
+```
+
+При `wtr add feature-x` создаются симлинки:
+```
+feature-x/doc -> ../master/doc
+feature-x/config.json -> ../master/config.json
+feature-x/.aiwr -> ../log_dir/.aiwr
+```
 
 ## Project Structure
 
@@ -113,6 +187,8 @@ wtr add <name> -c <commit> -B  # new branch from commit
 wtr -l, --list                 # list existing worktrees
 wtr -d, --delete <branch>      # delete worktree
 wtr --prune                    # remove worktrees for merged/deleted branches
+wtr --init                     # initialize worktree structure + share_obj.yaml
+wtr --init --log_dir           # + create log_dir directory
 wtr --completion <shell>       # generate shell completion (zsh/bash/fish)
 ```
 
@@ -313,6 +389,9 @@ class GitWorktreeManager:
     ) -> Path
     def delete_worktree(branch: str) -> None
     def get_current_branch() -> str | None
+    def get_worktree_list_raw() -> list[tuple[Path, str | None]]  # from git worktree list
+    def find_main_worktree_path() -> Path | None    # path to main branch worktree
+    def has_multiple_worktrees() -> bool            # check if >1 worktrees exist
 
     # Extended methods
     def get_branch_status(branch: str) -> BranchStatus
@@ -321,6 +400,10 @@ class GitWorktreeManager:
     def is_branch_merged(branch: str, into: str = "main") -> bool
     def prune_worktrees(branches: list[str]) -> None
     def get_uncommitted_files(branch: str) -> list[str]  # modified/staged/untracked files
+
+# Standalone function
+def create_shared_symlinks(worktree_path: Path, container: Path) -> list[str]
+    """Create symlinks based on share_obj.yaml. Returns list of warnings."""
 ```
 
 ### tui.py — TUI Components
@@ -331,6 +414,7 @@ class GitWorktreeManager:
 - `BranchItem` — list item with status indicators
 - `BranchPreview` — commit preview panel
 - `ConfirmDialog` — yes/no modal
+- `AlertDialog` — message with OK button (for warnings)
 - `CreateWorktreeResult` — dataclass for dialog result (name, base_branch, commit, create_branch)
 - `CreateWorktreeDialog` — create worktree modal with mode selection (Branch/Commit/Tag)
 - `UncommittedWarningDialog` — warning about uncommitted files in base branch
@@ -342,6 +426,7 @@ class GitWorktreeManager:
 - Argument parsing (argparse)
 - Route to TUI or quick commands
 - Handle exit codes
+- `handle_init(manager, with_log_dir)` — инициализация worktree-структуры
 
 ### fuzzy.py — Fuzzy Search
 
@@ -388,6 +473,7 @@ dependencies = [
     "GitPython>=3.1.0",
     "thefuzz>=0.22.0",      # fuzzy matching
     "tomli>=2.0.0",         # config parsing (Python < 3.11)
+    "PyYAML>=6.0.0",        # share_obj.yaml
 ]
 ```
 

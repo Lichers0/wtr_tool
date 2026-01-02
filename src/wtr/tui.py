@@ -22,7 +22,7 @@ from textual.widgets import (
 
 from .config import Config, load_config
 from .fuzzy import fuzzy_match
-from .git import BranchStatus, GitWorktreeManager
+from .git import BranchStatus, GitWorktreeManager, create_shared_symlinks
 
 
 def format_time_ago(dt: datetime | None) -> str:
@@ -85,6 +85,42 @@ class ConfirmDialog(ModalScreen[bool]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
+
+
+class AlertDialog(ModalScreen[None]):
+    """Modal dialog for alert messages."""
+
+    CSS = """
+    AlertDialog {
+        align: center middle;
+    }
+    AlertDialog > Container {
+        width: 60;
+        height: auto;
+        border: thick $warning;
+        background: $surface;
+        padding: 1 2;
+    }
+    AlertDialog Label {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    AlertDialog Button {
+        width: 100%;
+    }
+    """
+
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            yield Label(self.message)
+            yield Button("OK", id="ok", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
 
 
 @dataclass
@@ -876,13 +912,29 @@ class WorktreeApp(App[Path | None]):
                     result.name,
                     base_branch=result.base_branch,
                 )
+
+            # Create shared symlinks
+            warnings = create_shared_symlinks(path, self.manager.container)
+
             self._update_status(f"Created worktree: {path}")
             self.worktrees = self.manager.list_worktrees()
             self._refresh_branch_list()
-            self.push_screen(
-                ConfirmDialog(f"Go to {result.name}?"),
-                lambda go: self._on_goto_confirm(go, path),
-            )
+
+            if warnings:
+                # Show warnings first, then ask to go
+                alert_msg = "❗ " + "\n❗ ".join(warnings)
+                self.push_screen(
+                    AlertDialog(alert_msg),
+                    lambda _: self.push_screen(
+                        ConfirmDialog(f"Go to {result.name}?"),
+                        lambda go: self._on_goto_confirm(go, path),
+                    ),
+                )
+            else:
+                self.push_screen(
+                    ConfirmDialog(f"Go to {result.name}?"),
+                    lambda go: self._on_goto_confirm(go, path),
+                )
         except (RuntimeError, ValueError) as e:
             self._update_status(f"Error: {e}")
 

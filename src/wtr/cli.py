@@ -2,12 +2,18 @@
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 from .config import load_config
-from .git import GitWorktreeManager
+from .git import GitWorktreeManager, create_shared_symlinks
 from .tui import run_tui
+
+SHARE_OBJ_FILENAME = "share_obj.yaml"
+LOG_DIR_NAME = "log_dir"
 
 
 def request_cd(path: str | Path) -> None:
@@ -253,6 +259,16 @@ def main() -> int:
         help="Remove worktrees for merged/deleted branches",
     )
     parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Initialize worktree structure and create share_obj.yaml",
+    )
+    parser.add_argument(
+        "--log_dir",
+        action="store_true",
+        help="Create log_dir directory (only with --init)",
+    )
+    parser.add_argument(
         "--completion",
         metavar="SHELL",
         choices=["zsh", "bash", "fish"],
@@ -266,12 +282,21 @@ def main() -> int:
         print(SHELL_COMPLETIONS[args.completion])
         return 1  # Don't cd
 
+    # Validate --log_dir without --init
+    if args.log_dir and not args.init:
+        print("Error: --log_dir requires --init", file=sys.stderr)
+        return 2
+
     try:
         manager = GitWorktreeManager()
         config = load_config(manager.root)
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         return 2
+
+    # Handle --init
+    if args.init:
+        return handle_init(manager, args.log_dir)
 
     # Handle --list
     if args.list_worktrees:
@@ -313,6 +338,117 @@ def main() -> int:
         request_cd(result)
         return 0
     return 1
+
+
+def handle_init(manager: GitWorktreeManager, with_log_dir: bool) -> int:
+    """
+    Handle --init command.
+
+    Initializes worktree structure and creates share_obj.yaml.
+
+    Args:
+        manager: GitWorktreeManager instance
+        with_log_dir: If True, also create log_dir directory
+
+    Returns:
+        Exit code (0 success, 1 info, 2 error)
+    """
+    main_branch = manager.get_main_branch()
+    current_branch = manager.get_current_branch()
+
+    # Check if there are multiple worktrees
+    if manager.has_multiple_worktrees():
+        # Find main worktree path
+        main_path = manager.find_main_worktree_path()
+        if not main_path:
+            print(
+                f"Error: Cannot find main branch '{main_branch}' in worktree list",
+                file=sys.stderr,
+            )
+            return 2
+
+        # If not in main worktree, run init there
+        if manager.root != main_path:
+            print(f"Running init in main worktree: {main_path}", file=sys.stderr)
+            cmd = ["wtr", "--init"]
+            if with_log_dir:
+                cmd.append("--log_dir")
+            result = subprocess.run(cmd, cwd=main_path)
+            return result.returncode
+    else:
+        # No multiple worktrees - check current branch
+        if current_branch != main_branch:
+            print(
+                f"Error: Current branch is '{current_branch}', not '{main_branch}'.\n"
+                f"Switch to '{main_branch}' branch and run 'wtr --init' again.",
+                file=sys.stderr,
+            )
+            return 2
+
+    # Check and perform restructure if needed
+    if not manager.is_valid_structure():
+        print(
+            f"Repository is not in worktree structure.\n"
+            f"Move '{main_branch}' to worktree structure? [y/N] ",
+            end="",
+            file=sys.stderr,
+        )
+
+        try:
+            response = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled", file=sys.stderr)
+            return 1
+
+        if response != "y":
+            print("Cancelled", file=sys.stderr)
+            return 1
+
+        try:
+            new_root = manager.restructure_to_worktree()
+            print(f"Restructured: {new_root}", file=sys.stderr)
+        except Exception as e:
+            print(f"Restructure failed: {e}", file=sys.stderr)
+            return 2
+
+    # Now container is parent of main branch worktree
+    container = manager.container
+    share_obj_path = container / SHARE_OBJ_FILENAME
+
+    # Check if share_obj.yaml already exists
+    if share_obj_path.exists():
+        print(f"File already exists: {share_obj_path}", file=sys.stderr)
+    else:
+        # Create share_obj.yaml
+        share_obj_data = {
+            main_branch: ["doc"],
+        }
+
+        if with_log_dir:
+            share_obj_data[LOG_DIR_NAME] = [".aiwr"]
+
+        with open(share_obj_path, "w") as f:
+            yaml.dump(share_obj_data, f, default_flow_style=False, allow_unicode=True)
+
+        print(f"Created: {share_obj_path}", file=sys.stderr)
+
+    # Create log_dir if requested
+    if with_log_dir:
+        log_dir_path = container / LOG_DIR_NAME
+        if log_dir_path.exists():
+            print(f"Directory already exists: {log_dir_path}", file=sys.stderr)
+        else:
+            log_dir_path.mkdir()
+            print(f"Created: {log_dir_path}", file=sys.stderr)
+
+            # Create .aiwr directory inside log_dir
+            aiwr_path = log_dir_path / ".aiwr"
+            aiwr_path.mkdir()
+            print(f"Created: {aiwr_path}", file=sys.stderr)
+
+    # Request cd to main branch worktree
+    request_cd(manager.root)
+    return 0
 
 
 def handle_restructure(manager: GitWorktreeManager) -> int | None:
@@ -402,6 +538,12 @@ def handle_add(
         else:
             base_branch = base or config.worktree.default_base or manager.get_main_branch()
             path = manager.create_worktree(name, base_branch)
+
+        # Create shared symlinks
+        warnings = create_shared_symlinks(path, manager.container)
+        for w in warnings:
+            print(f"❗ {w}", file=sys.stderr)
+
         request_cd(path)
         return 0
     except (RuntimeError, ValueError) as e:

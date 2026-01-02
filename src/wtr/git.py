@@ -320,6 +320,55 @@ class GitWorktreeManager:
             return None
         return self.repo.active_branch.name
 
+    def get_worktree_list_raw(self) -> list[tuple[Path, str | None]]:
+        """
+        Get raw worktree list from git worktree list command.
+
+        Returns:
+            List of (path, branch_name) tuples. branch_name is None for detached HEAD.
+        """
+        result = []
+        try:
+            output = self.repo.git.worktree("list", "--porcelain")
+            current_path = None
+
+            for line in output.split("\n"):
+                if line.startswith("worktree "):
+                    current_path = Path(line[9:])
+                elif line.startswith("branch refs/heads/"):
+                    branch = line[18:]  # strip "branch refs/heads/"
+                    if current_path:
+                        result.append((current_path, branch))
+                        current_path = None
+                elif line == "detached":
+                    if current_path:
+                        result.append((current_path, None))
+                        current_path = None
+        except Exception:
+            pass
+
+        return result
+
+    def find_main_worktree_path(self) -> Path | None:
+        """
+        Find path to main branch worktree from git worktree list.
+
+        Returns:
+            Path to main branch worktree, or None if not found.
+        """
+        main_branch = self.get_main_branch()
+        worktree_list = self.get_worktree_list_raw()
+
+        for path, branch in worktree_list:
+            if branch == main_branch:
+                return path
+
+        return None
+
+    def has_multiple_worktrees(self) -> bool:
+        """Check if there are multiple worktrees (more than just main repo)."""
+        return len(self.get_worktree_list_raw()) > 1
+
     def get_branch_status(self, branch: str) -> BranchStatus:
         """Get detailed status for a branch."""
         status = BranchStatus()
@@ -501,3 +550,61 @@ class GitWorktreeManager:
         files.extend(repo.untracked_files)
 
         return sorted(set(files))
+
+
+SHARE_OBJ_FILENAME = "share_obj.yaml"
+
+
+def create_shared_symlinks(worktree_path: Path, container: Path) -> list[str]:
+    """
+    Create symlinks in new worktree based on share_obj.yaml.
+
+    Args:
+        worktree_path: Path to newly created worktree
+        container: Path to container directory (parent of all worktrees)
+
+    Returns:
+        List of warning messages (empty if all ok)
+    """
+    warnings = []
+    share_obj_file = container / SHARE_OBJ_FILENAME
+
+    if not share_obj_file.exists():
+        return warnings
+
+    try:
+        import yaml
+        with open(share_obj_file) as f:
+            share_obj = yaml.safe_load(f) or {}
+    except Exception as e:
+        warnings.append(f"Failed to read {SHARE_OBJ_FILENAME}: {e}")
+        return warnings
+
+    worktree_name = worktree_path.name
+
+    for source_dir, items in share_obj.items():
+        # Skip if source is the worktree itself
+        if source_dir == worktree_name:
+            continue
+
+        if not isinstance(items, list):
+            warnings.append(f"Invalid format for '{source_dir}': expected list")
+            continue
+
+        source_path = container / source_dir
+
+        for item in items:
+            symlink_path = worktree_path / item
+            target = Path("..") / source_dir / item
+
+            # Check if source exists (warning only, still create symlink)
+            item_source_path = source_path / item
+            if not item_source_path.exists():
+                warnings.append(f"Source does not exist: {source_dir}/{item}")
+
+            try:
+                symlink_path.symlink_to(target)
+            except OSError as e:
+                warnings.append(f"Failed to create symlink {item}: {e}")
+
+    return warnings
