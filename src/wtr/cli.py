@@ -272,6 +272,13 @@ def main() -> int:
         help="Create log_dir directory (only with --init)",
     )
     parser.add_argument(
+        "--doc_dir",
+        nargs="?",
+        const="doc_dir",
+        metavar="NAME",
+        help="Create doc worktree from master (only with --init)",
+    )
+    parser.add_argument(
         "--completion",
         metavar="SHELL",
         choices=["zsh", "bash", "fish"],
@@ -290,9 +297,12 @@ def main() -> int:
         print(SHELL_COMPLETIONS[args.completion])
         return 1  # Don't cd
 
-    # Validate --log_dir without --init
+    # Validate --log_dir and --doc_dir without --init
     if args.log_dir and not args.init:
         print("Error: --log_dir requires --init", file=sys.stderr)
+        return 2
+    if args.doc_dir and not args.init:
+        print("Error: --doc_dir requires --init", file=sys.stderr)
         return 2
 
     try:
@@ -304,7 +314,7 @@ def main() -> int:
 
     # Handle --init
     if args.init:
-        return handle_init(manager, args.log_dir)
+        return handle_init(manager, args.log_dir, args.doc_dir)
 
     # Handle --list
     if args.list_worktrees:
@@ -348,7 +358,11 @@ def main() -> int:
     return 1
 
 
-def handle_init(manager: GitWorktreeManager, with_log_dir: bool) -> int:
+def handle_init(
+    manager: GitWorktreeManager,
+    with_log_dir: bool,
+    doc_dir: str | None,
+) -> int:
     """
     Handle --init command.
 
@@ -357,6 +371,7 @@ def handle_init(manager: GitWorktreeManager, with_log_dir: bool) -> int:
     Args:
         manager: GitWorktreeManager instance
         with_log_dir: If True, also create log_dir directory
+        doc_dir: If set, create doc worktree with this name
 
     Returns:
         Exit code (0 success, 1 info, 2 error)
@@ -423,13 +438,28 @@ def handle_init(manager: GitWorktreeManager, with_log_dir: bool) -> int:
     container = manager.container
     share_obj_path = container / SHARE_OBJ_FILENAME
 
+    # Create doc worktree if requested
+    doc_source = main_branch
+    if doc_dir:
+        doc_worktree_path = container / doc_dir
+        if doc_worktree_path.exists():
+            print(f"Worktree already exists: {doc_worktree_path}", file=sys.stderr)
+        else:
+            try:
+                manager.create_worktree(doc_dir, base_branch=main_branch)
+                print(f"Created doc worktree: {doc_dir}", file=sys.stderr)
+            except (RuntimeError, ValueError) as e:
+                print(f"Failed to create doc worktree: {e}", file=sys.stderr)
+                return 2
+        doc_source = doc_dir
+
     # Check if share_obj.yaml already exists
     if share_obj_path.exists():
         print(f"File already exists: {share_obj_path}", file=sys.stderr)
     else:
         # Create share_obj.yaml
         share_obj_data = {
-            main_branch: ["doc"],
+            doc_source: ["doc"],
         }
 
         if with_log_dir:
