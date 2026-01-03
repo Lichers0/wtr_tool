@@ -8,22 +8,15 @@ BIN_DIR="$HOME/.local/bin"
 
 # ========== FUNCTIONS ==========
 
-# Detect current shell
+# Detect user's default shell (not the current script's shell)
 detect_shell() {
-    if [ -n "$FISH_VERSION" ]; then
-        echo "fish"
-    elif [ -n "$ZSH_VERSION" ]; then
-        echo "zsh"
-    elif [ -n "$BASH_VERSION" ]; then
-        echo "bash"
-    else
-        # Fallback: check $SHELL
-        case "$SHELL" in
-            */fish) echo "fish" ;;
-            */zsh)  echo "zsh" ;;
-            *)      echo "bash" ;;
-        esac
-    fi
+    # Use $SHELL which contains user's default shell
+    case "$SHELL" in
+        */fish) echo "fish" ;;
+        */zsh)  echo "zsh" ;;
+        */bash) echo "bash" ;;
+        *)      echo "bash" ;;  # Fallback
+    esac
 }
 
 # Get RC file for shell
