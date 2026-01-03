@@ -4,9 +4,12 @@ import argparse
 import os
 import subprocess
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 import yaml
+
+__version__ = version("wtr")
 
 from .config import load_config
 from .git import GitWorktreeManager, create_shared_symlinks
@@ -273,6 +276,11 @@ def main() -> int:
         metavar="SHELL",
         choices=["zsh", "bash", "fish"],
         help="Generate shell completion script",
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
 
     args = parser.parse_args()
