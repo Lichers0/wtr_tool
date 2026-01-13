@@ -459,7 +459,7 @@ def handle_init(
     else:
         # Create share_obj.yaml
         share_obj_data = {
-            doc_source: ["doc"],
+            doc_source: ["docs"],
         }
 
         if with_log_dir:
