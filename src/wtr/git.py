@@ -595,12 +595,23 @@ def create_shared_symlinks(worktree_path: Path, container: Path) -> list[str]:
 
         for item in items:
             symlink_path = worktree_path / item
-            target = Path("..") / source_dir / item
+
+            # Calculate depth: count path components in item
+            item_path = Path(item)
+            depth = len(item_path.parts) - 1  # -1 because last part is file/dir itself
+
+            # Build relative path with correct number of ..
+            # depth=0 (root file) needs 1 "..", depth=1 (one subdir) needs 2 "..", etc.
+            rel_prefix = Path(*[".."] * (depth + 1))
+            target = rel_prefix / source_dir / item
 
             # Check if source exists (warning only, still create symlink)
             item_source_path = source_path / item
             if not item_source_path.exists():
                 warnings.append(f"Source does not exist: {source_dir}/{item}")
+
+            # Create parent directories if needed
+            symlink_path.parent.mkdir(parents=True, exist_ok=True)
 
             try:
                 symlink_path.symlink_to(target)
