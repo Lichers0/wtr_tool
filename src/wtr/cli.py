@@ -45,7 +45,7 @@ _wtr() {
     # Handle subcommands
     if [[ "${words[2]}" == "add" ]]; then
         _arguments \\
-            '1:name:' \\
+            '1:name:($branches)' \\
             '(-b --base)'{-b,--base}'[Base branch]:branch:($branches)' \\
             '(-c --commit)'{-c,--commit}'[Commit or tag]:commit:($tags)' \\
             '(-B --new-branch)'{-B,--new-branch}'[Create branch from commit]'
@@ -86,6 +86,9 @@ _wtr() {
         esac
         if [[ ${cur} == -* ]]; then
             COMPREPLY=( $(compgen -W "-b --base -c --commit -B --new-branch" -- ${cur}) )
+        else
+            local branches=$(git branch --format='%(refname:short)' 2>/dev/null)
+            COMPREPLY=( $(compgen -W "${branches}" -- ${cur}) )
         fi
         return 0
     fi
@@ -131,6 +134,7 @@ complete -c wtr -l prune -d 'Remove stale worktrees'
 complete -c wtr -l completion -d 'Generate completion' -xa 'zsh bash fish'
 complete -c wtr -n '__fish_is_first_arg' -a 'add' -d 'Create new worktree'
 complete -c wtr -n '__fish_is_first_arg' -xa '(__fish_wtr_worktrees)'
+complete -c wtr -n '__fish_seen_subcommand_from add' -xa '(__fish_wtr_branches)'
 complete -c wtr -n '__fish_seen_subcommand_from add' -s b -l base -d 'Base branch' -xa '(__fish_wtr_branches)'
 complete -c wtr -n '__fish_seen_subcommand_from add' -s c -l commit -d 'Commit or tag' -xa '(__fish_wtr_tags)'
 complete -c wtr -n '__fish_seen_subcommand_from add' -s B -l new-branch -d 'Create branch from commit'
@@ -150,6 +154,7 @@ Examples:
   wtr                       Launch TUI
   wtr feature-auth          Switch to existing worktree
   wtr add feature-new       Create new worktree
+  wtr add feature-x         Use existing branch (if exists) or create new
   wtr add -b develop fix    Create from 'develop' branch
   wtr add -c abc1234        Detached HEAD at commit
   wtr add -c v1.2.0         Detached HEAD at tag
@@ -574,8 +579,25 @@ def handle_add(
                 create_branch=create_branch,
             )
         else:
-            base_branch = base or config.worktree.default_base or manager.get_main_branch()
-            path = manager.create_worktree(name, base_branch)
+            branch_exists = manager.branch_exists(name)
+
+            # --base is not applicable for existing branches
+            if branch_exists and base:
+                print(
+                    f"Error: Branch '{name}' already exists, --base is not applicable",
+                    file=sys.stderr,
+                )
+                return 2
+
+            if branch_exists:
+                # Use existing branch
+                print(f"Using existing branch: {name}", file=sys.stderr)
+                path = manager.create_worktree(name)
+            else:
+                # Create new branch from base
+                base_branch = base or config.worktree.default_base or manager.get_main_branch()
+                print(f"Created branch '{name}' from '{base_branch}'", file=sys.stderr)
+                path = manager.create_worktree(name, base_branch)
 
         # Create shared symlinks
         warnings = create_shared_symlinks(path, manager.container)

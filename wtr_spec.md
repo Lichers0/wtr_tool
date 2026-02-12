@@ -179,7 +179,7 @@ wtr/
 ```bash
 wtr                            # launch TUI
 wtr <branch>                   # switch to existing worktree (no TUI)
-wtr add <name>                 # create worktree for branch
+wtr add <name>                 # create worktree (use existing branch or create new)
 wtr add <name> -b <branch>     # create worktree from base branch
 wtr add -c <commit>            # detached HEAD at commit/tag
 wtr add <name> -c <commit>     # detached HEAD with custom dir name
